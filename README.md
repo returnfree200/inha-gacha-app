@@ -1,5 +1,4 @@
 <div align="center">
-  <img src="https://media.discordapp.net/attachments/1117366376518172688/1183286071431364669/anha_goose.png" width="150" alt="Inha University Mascot">
   <h1>🎲 정석가챠 | 인하대 도서 추천 앱</h1>
   <p><strong>"오늘 당신의 운명은 어떤 서가에 있나요?"</strong></p>
   <p>
