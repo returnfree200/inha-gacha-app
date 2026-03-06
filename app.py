@@ -12,8 +12,11 @@ st.set_page_config(
 import requests
 
 # --- API 설정 ---
-# TODO: 여기에 발급받은 실제 국립중앙도서관 OpenAPI 키를 입력하세요.
-API_KEY = "YOUR_API_KEY_HERE"
+# TODO: .streamlit/secrets.toml 파일에 OpenAPI 키를 입력하세요.
+try:
+    API_KEY = st.secrets["API_KEY"]
+except (FileNotFoundError, KeyError):
+    API_KEY = "YOUR_API_KEY_HERE"
 
 # --- KDC 대분류 정의 ---
 KDC_CATEGORIES = {
@@ -47,14 +50,12 @@ def get_location_by_kdc(kdc_code):
     else:
         return "위치 정보 없음"
 
-# --- 데이터 가져오기 (OpenAPI 연동) ---
-def fetch_books_by_kdc(kdc_code):
+# --- 데이터 가져오기 (OpenAPI 연동 & Fallback) ---
+def fetch_books_by_kdc(kdc_code, is_fallback_allowed=True):
     """
-    국립중앙도서관 OpenAPI 연동 함수
+    국립중앙도서관 OpenAPI 연동 함수 (에러 발생 시 Mock Data로 자동 우회)
     """
     url = "https://www.nl.go.kr/NL/search/openApi/search.do"
-    
-    # 랜덤 페이지 번호 생성 (1~10)
     random_page = random.randint(1, 10)
     
     params = {
@@ -66,9 +67,46 @@ def fetch_books_by_kdc(kdc_code):
     }
     
     try:
-        response = requests.get(url, params=params)
+        # 응답 지연 시 빠르게 대체 데이터로 넘어가도록 timeout 5초 설정
+        response = requests.get(url, params=params, timeout=5)
         response.raise_for_status()
         data = response.json()
+        
+        if data.get("result", {}).get("total", 0) == 0 or not data.get("result", {}).get("item"):
+            raise ValueError("검색 결과 없음")
+            
+        books = data["result"]["item"]
+        return books, False  # (데이터, fallback_여부)
+        
+    except Exception as e:
+        if not is_fallback_allowed:
+            raise Exception("API 통신 중 오류가 발생했습니다.")
+            
+        # API 실패 시 빈출되는 Mock Data Fallback
+        mock_database = {
+            "0": [
+                {"titleInfo": "거의 모든 IT의 역사", "authorInfo": "정지훈", "pubYearInfo": "2010", "callNoInfo": "004.09 정78ㄱ", "imageUrl": "https://picsum.photos/seed/it/300/400"},
+                {"titleInfo": "도서관의 비밀", "authorInfo": "이정수", "pubYearInfo": "2018", "callNoInfo": "020 이74ㄷ", "imageUrl": "https://picsum.photos/seed/lib/300/400"}
+            ],
+            "1": [
+                {"titleInfo": "철학은 어떻게 삶의 무기가 되는가", "authorInfo": "야마구치 슈", "pubYearInfo": "2019", "callNoInfo": "104 야32ㅊ", "imageUrl": "https://picsum.photos/seed/philo/300/400"}
+            ],
+            "3": [
+                {"titleInfo": "정의란 무엇인가", "authorInfo": "마이클 샌델", "pubYearInfo": "2010", "callNoInfo": "340.2 샌24ㅈ", "imageUrl": "https://picsum.photos/seed/justice/300/400"}
+            ],
+            "5": [
+                {"titleInfo": "클린 코드", "authorInfo": "로버트 C. 마틴", "pubYearInfo": "2013", "callNoInfo": "566.01 마88ㅋ", "imageUrl": "https://picsum.photos/seed/code/300/400"}
+            ],
+            "8": [
+                {"titleInfo": "소년이 온다", "authorInfo": "한강", "pubYearInfo": "2014", "callNoInfo": "813.6 한11ㅅ", "imageUrl": "https://picsum.photos/seed/novel/300/400"}
+            ]
+        }
+        
+        fallback_data = mock_database.get(kdc_code, [
+            {"titleInfo": f"{KDC_CATEGORIES.get(kdc_code, '도서')} 추천서", "authorInfo": "정석가챠봇", "pubYearInfo": "2024", "callNoInfo": f"{kdc_code}00 가11ㅊ", "imageUrl": f"https://picsum.photos/seed/{kdc_code}f/300/400"}
+        ])
+        
+        return fallback_data, True
         
         # 결과가 없는 경우 None 반환
         if data.get("result", {}).get("total", 0) == 0 or not data.get("result", {}).get("item"):
@@ -109,11 +147,14 @@ def main():
             time.sleep(1.2)  # 로딩 연출
             
             try:
-                books = fetch_books_by_kdc(selected_kdc)
+                books, is_fallback = fetch_books_by_kdc(selected_kdc)
                 
                 if not books:
                     st.warning("앗, 운명의 책을 찾지 못했습니다! 검색 조건에 맞는 도서가 없거나 API 응답에 문제가 있을 수 있습니다. 다시 시도해주세요!")
                 else:
+                    if is_fallback:
+                        st.warning("⚠️ **연결 지연 안내**: 현재 국립중앙도서관 서버 응답이 매우 지연되어, **오프라인 샘플 데이터**로 운명의 책을 선별했습니다!")
+
                     result_book = random.choice(books)
                     expected_location = get_location_by_kdc(selected_kdc)
                     
