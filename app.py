@@ -166,7 +166,7 @@ def main():
                     st.warning("앗, 운명의 책을 찾지 못했습니다! 검색 조건에 맞는 도서가 없거나 API 응답에 문제가 있을 수 있습니다. 다시 시도해주세요!")
                 else:
                     if is_fallback:
-                        st.warning("⚠️ **연결 지연 안내**: 현재 국립중앙도서관 서버 응답이 매우 지연되어, **오프라인 샘플 데이터**로 운명의 책을 선별했습니다!")
+                        st.warning("⚠️ **연결 지연 안내**: 현재 정석학술정보관 서버 응답이 매우 지연되어, **오프라인 샘플 데이터**로 운명의 책을 선별했습니다!")
 
                     result_book = random.choice(books)
                     expected_location = get_location_by_kdc(selected_kdc)
