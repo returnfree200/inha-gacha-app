@@ -11,12 +11,6 @@ st.set_page_config(
 
 import requests
 
-# --- API 설정 ---
-# TODO: .streamlit/secrets.toml 파일에 OpenAPI 키를 입력하세요.
-try:
-    API_KEY = st.secrets["API_KEY"]
-except (FileNotFoundError, KeyError):
-    API_KEY = "YOUR_API_KEY_HERE"
 
 # --- KDC 대분류 정의 ---
 KDC_CATEGORIES = {
@@ -50,20 +44,20 @@ def get_location_by_kdc(kdc_code):
     else:
         return "위치 정보 없음"
 
-# --- 데이터 가져오기 (OpenAPI 연동 & Fallback) ---
+# --- 데이터 가져오기 (Inha OpenAPI 연동 & Fallback) ---
 def fetch_books_by_kdc(kdc_code, is_fallback_allowed=True):
     """
-    국립중앙도서관 OpenAPI 연동 함수 (에러 발생 시 Mock Data로 자동 우회)
+    인하대학교 정석학술정보관 API 연동 함수 (에러 발생 시 Mock Data로 자동 우회)
     """
-    url = "https://www.nl.go.kr/NL/search/openApi/search.do"
-    random_page = random.randint(1, 10)
-    
+    # 넓은 범위로 검색 후 파이썬에서 필터링 (결과 풀을 늘리기 위함)
+    url = "https://lib.inha.ac.kr/pyxis-api/1/collections/1/search"
     params = {
-        'key': API_KEY,
-        'apiType': 'json',
-        'kdc': kdc_code,
-        'pageSize': 100,
-        'pageNum': random_page
+        'ALL': f'k|a|{kdc_code}',
+        'max': 100,  # 여러 권을 한 번에 호출
+        'offset': random.choice([0, 50, 100, 150, 200]),  # 랜덤 페이지
+        'facet': 'true',
+        'fuzzy': 'true',
+        'isForPyxis3': 'true'
     }
     
     try:
@@ -72,11 +66,43 @@ def fetch_books_by_kdc(kdc_code, is_fallback_allowed=True):
         response.raise_for_status()
         data = response.json()
         
-        if data.get("result", {}).get("total", 0) == 0 or not data.get("result", {}).get("item"):
+        items = data.get("data", {}).get("list", [])
+        
+        if not items:
             raise ValueError("검색 결과 없음")
             
-        books = data["result"]["item"]
-        return books, False  # (데이터, fallback_여부)
+        books = []
+        for item in items:
+            title = item.get("titleStatement") or "제목 없음"
+            author = item.get("author") or "저자 미상"
+            pub_year = item.get("publication") or "연도 미상"
+            image_url = item.get("thumbnailUrl") or ""
+            
+            call_no_info = "청구기호 정보 없음"
+            branch_vols = item.get("branchVolumes", [])
+            if branch_vols and isinstance(branch_vols, list) and len(branch_vols) > 0:
+                call_no_info = branch_vols[0].get("volume") or "청구기호 정보 없음"
+                
+            books.append({
+                "titleInfo": title,
+                "authorInfo": author,
+                "pubYearInfo": pub_year,
+                "callNoInfo": call_no_info,
+                "imageUrl": image_url
+            })
+            
+        # 분류 기호(KDC)에 정확히 일치하는 도서만 필터링 (청구기호가 선택한 KDC 숫자로 시작)
+        valid_books = []
+        for b in books:
+            cnum = b["callNoInfo"].upper().strip()
+            # 일반 청구기호 혹은 참고도서(R) 등 접두어가 붙은 경우 처리
+            if cnum.startswith(str(kdc_code)) or cnum.replace("R ", "").replace("REF ", "").startswith(str(kdc_code)):
+                valid_books.append(b)
+                
+        if not valid_books:
+            raise ValueError("해당 분류의 검색 결과가 페이지에 없습니다.")
+            
+        return valid_books, False  # (데이터, fallback_여부)
         
     except Exception as e:
         if not is_fallback_allowed:
@@ -107,19 +133,6 @@ def fetch_books_by_kdc(kdc_code, is_fallback_allowed=True):
         ])
         
         return fallback_data, True
-        
-        # 결과가 없는 경우 None 반환
-        if data.get("result", {}).get("total", 0) == 0 or not data.get("result", {}).get("item"):
-            return None
-            
-        books = data["result"]["item"]
-        return books
-        
-    except requests.exceptions.RequestException as e:
-        # 통신 에러 등 발생 시 예외 발생
-        raise Exception("API 통신 중 오류가 발생했습니다. API 키나 네트워크 상태를 확인해주세요.")
-    except ValueError: # json 파싱 에러
-        raise Exception("API 키가 올바른지 확인해주세요. (인증 실패 시 JSON 형태가 아닐 수 있습니다.)")
 
 
 # --- 메인 UI ---
@@ -189,7 +202,7 @@ def main():
                             st.info("청구기호를 메모해서 해당 층으로 찾아가보세요!", icon="💡")
             except Exception as e:
                 st.error(f"오류가 발생했습니다: {str(e)}")
-                st.info("⚠️ 상단의 API_KEY 변수에 정상적인 국립중앙도서관 OpenAPI 키가 입력되었는지 확인해주세요.")
+                st.info("⚠️ 도서관 서버와의 통신이 원활하지 않습니다.")
 
 if __name__ == "__main__":
     main()
