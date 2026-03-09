@@ -15,16 +15,16 @@ import re
 
 # --- KDC 대분류 정의 ---
 KDC_CATEGORIES = {
-    "0": "총류",
-    "1": "철학",
-    "2": "종교",
-    "3": "사회과학",
-    "4": "자연과학",
-    "5": "기술과학",
-    "6": "예술",
-    "7": "언어",
-    "8": "문학",
-    "9": "역사"
+    "000": "총류",
+    "100": "철학",
+    "200": "종교",
+    "300": "사회과학",
+    "400": "자연과학",
+    "500": "기술과학",
+    "600": "예술",
+    "700": "언어",
+    "800": "문학",
+    "900": "역사"
 }
 
 # --- 인하대 맞춤형 로직 ---
@@ -32,7 +32,7 @@ def get_location_by_kdc(kdc_code):
     """
     KDC 번호에 따른 인하대학교 정석학술정보관 위치 반환
     """
-    kdc_num = int(kdc_code) * 100  # API 호출 시 앞자리만 사용하므로 x100 처리
+    kdc_num = int(kdc_code)
     
     if 0 <= kdc_num <= 199:
         return "1층 정석라운지 / 헤리티지라운지"
@@ -60,7 +60,7 @@ def fetch_books_by_kdc(kdc_code, max_retries=10):
     for attempt in range(max_retries):
         # pyxis-api 전용 '분류기호(cl)' 검색 적용: 해당 그룹 번호로 시작하는 진짜 도서만 100% 가져옵니다.
         params = {
-            'ALL': f'cl|a|{kdc_code}',
+            'ALL': f'cl|a|{str(kdc_code)[:1]}',
             'max': 100,  # 한 번에 100권 호출
             'offset': current_offset,
             'facet': 'true',
@@ -106,8 +106,10 @@ def fetch_books_by_kdc(kdc_code, max_retries=10):
             for b in books:
                 cnum = b["callNoInfo"].upper().strip()
                 match = re.search(r'\d+', cnum)
-                if match and match.group(0).startswith(str(kdc_code)):
-                    valid_books.append(b)
+                if match and match.group(0).startswith(str(kdc_code)[:1]):
+                    # 한글 서적 위주 노출: 제목이나 저자에 한글이 1글자라도 섞인 도서만 선별합니다
+                    if re.search(r'[가-힣]', b["titleInfo"]) or re.search(r'[가-힣]', b["authorInfo"]):
+                        valid_books.append(b)
                     
             if valid_books:
                 # 조건에 맞는 책을 찾았으면 즉시 반환
