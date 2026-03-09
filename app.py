@@ -46,7 +46,7 @@ def get_location_by_kdc(kdc_code):
         return "위치 정보 없음"
 
 # --- 데이터 가져오기 (Inha OpenAPI 연동 & Fallback) ---
-def fetch_books_by_kdc(kdc_code, max_retries=7):
+def fetch_books_by_kdc(kdc_code, max_retries=10):
     """
     인하대학교 정석학술정보관 API 연동 함수
     트래픽 제한을 위해 최대 max_retries 만큼 페이징(offset)을 늘려가며 요청합니다.
@@ -58,8 +58,12 @@ def fetch_books_by_kdc(kdc_code, max_retries=7):
     fallback_reason = "timeout"
     
     for attempt in range(max_retries):
+        # 0~9와 같은 숫자만 검색하면 엉뚱한 책이 잡히므로 "자연과학 4" 처럼 키워드를 구체화하여 적중률을 크게 높입니다.
+        category_name = KDC_CATEGORIES.get(str(kdc_code), "")
+        search_query = f"{category_name} {kdc_code}".strip()
+        
         params = {
-            'ALL': f'k|a|{kdc_code}',
+            'ALL': f'k|a|{search_query}',
             'max': 100,  # 한 번에 100권 호출
             'offset': current_offset,
             'facet': 'true',
@@ -146,7 +150,7 @@ def main():
     
     # 결과 영역
     if is_clicked:
-        with st.spinner('운명의 책을 고르는 중... (최대 7페이지 탐색)'):
+        with st.spinner('운명의 책을 고르는 중...'):
             time.sleep(1.2)  # 로딩 연출
             
             try:
@@ -157,7 +161,7 @@ def main():
                     if reason == "timeout":
                         st.error("⚠️ 도서관 서버 응답이 지연되고 있습니다. 잠시 후 다시 가챠를 돌려주세요! 🔄")
                     else:
-                        st.warning("⚠️ 지정된 페이지 범위 내에 원하는 분야의 도서를 찾지 못했습니다. 운명의 책을 다시 한 번 돌려보세요! 🎲")
+                        st.warning("⚠️ 해당 분야의 운명의 책을 찾지 못했습니다. 다시 한 번 가챠를 돌려주세요! 🎲")
                 else:
 
                     result_book = random.choice(books)
