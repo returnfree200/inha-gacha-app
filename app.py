@@ -46,15 +46,15 @@ def get_location_by_kdc(kdc_code):
         return "위치 정보 없음"
 
 # --- 데이터 가져오기 (Inha OpenAPI 연동 & Fallback) ---
-def fetch_books_by_kdc(kdc_code, is_fallback_allowed=True, max_retries=5):
+def fetch_books_by_kdc(kdc_code, max_retries=7):
     """
-    인하대학교 정석학술정보관 API 연동 함수 (에러 발생 시 Mock Data로 자동 우회)
+    인하대학교 정석학술정보관 API 연동 함수
     트래픽 제한을 위해 최대 max_retries 만큼 페이징(offset)을 늘려가며 요청합니다.
     """
     url = "https://lib.inha.ac.kr/pyxis-api/1/collections/1/search"
     
     # 결과를 무작위로 보여주기 위해 초기 offset은 랜덤하게 시작
-    current_offset = random.choice([0, 50, 100, 150, 200])
+    current_offset = random.choice([0, 50, 100, 150, 200, 300, 400])
     fallback_reason = "timeout"
     
     for attempt in range(max_retries):
@@ -121,38 +121,8 @@ def fetch_books_by_kdc(kdc_code, is_fallback_allowed=True, max_retries=5):
             fallback_reason = "timeout"
             break  # 통신 자체가 안 되면 남은 offset도 시도할 필요 없이 바로 실패 처리
             
-    # 최대 재시도 횟수 내에 못 찾았거나 네트워크 오류인 경우 예외 발생 처리
-    if not is_fallback_allowed:
-        if fallback_reason == "timeout":
-            raise Exception("API 통신 중 오류가 발생했습니다.")
-        else:
-            raise ValueError("해당 분류의 검색 결과가 페이지에 없습니다.")
-    
-    # API 실패 혹은 검색 결과 없음 시 Mock Data Fallback 반환
-    mock_database = {
-        "0": [
-            {"titleInfo": "거의 모든 IT의 역사", "authorInfo": "정지훈", "pubYearInfo": "2010", "callNoInfo": "004.09 정78ㄱ", "imageUrl": "https://picsum.photos/seed/it/300/400"},
-            {"titleInfo": "도서관의 비밀", "authorInfo": "이정수", "pubYearInfo": "2018", "callNoInfo": "020 이74ㄷ", "imageUrl": "https://picsum.photos/seed/lib/300/400"}
-        ],
-        "1": [
-            {"titleInfo": "철학은 어떻게 삶의 무기가 되는가", "authorInfo": "야마구치 슈", "pubYearInfo": "2019", "callNoInfo": "104 야32ㅊ", "imageUrl": "https://picsum.photos/seed/philo/300/400"}
-        ],
-        "3": [
-            {"titleInfo": "정의란 무엇인가", "authorInfo": "마이클 샌델", "pubYearInfo": "2010", "callNoInfo": "340.2 샌24ㅈ", "imageUrl": "https://picsum.photos/seed/justice/300/400"}
-        ],
-        "5": [
-            {"titleInfo": "클린 코드", "authorInfo": "로버트 C. 마틴", "pubYearInfo": "2013", "callNoInfo": "566.01 마88ㅋ", "imageUrl": "https://picsum.photos/seed/code/300/400"}
-        ],
-        "8": [
-            {"titleInfo": "소년이 온다", "authorInfo": "한강", "pubYearInfo": "2014", "callNoInfo": "813.6 한11ㅅ", "imageUrl": "https://picsum.photos/seed/novel/300/400"}
-        ]
-    }
-    
-    fallback_data = mock_database.get(kdc_code, [
-        {"titleInfo": f"{KDC_CATEGORIES.get(kdc_code, '도서')} 추천서", "authorInfo": "정석가챠봇", "pubYearInfo": "2024", "callNoInfo": f"{kdc_code}00 가11ㅊ", "imageUrl": f"https://picsum.photos/seed/{kdc_code}f/300/400"}
-    ])
-    
-    return fallback_data, fallback_reason
+    # 찾지 못했을 경우 억지로 샘플 데이터를 만들지 않고 사유만 반환하여 UI에 위임
+    return None, fallback_reason
 
 
 # --- 메인 UI ---
@@ -176,19 +146,19 @@ def main():
     
     # 결과 영역
     if is_clicked:
-        with st.spinner('운명의 책을 고르는 중... (최대 5페이지 탐색)'):
+        with st.spinner('운명의 책을 고르는 중... (최대 7페이지 탐색)'):
             time.sleep(1.2)  # 로딩 연출
             
             try:
-                books, fallback_reason = fetch_books_by_kdc(selected_kdc)
+                books, reason = fetch_books_by_kdc(selected_kdc)
                 
                 if not books:
-                    st.warning("앗, 운명의 책을 찾지 못했습니다! 검색 조건에 맞는 도서가 없거나 API 응답에 문제가 있을 수 있습니다. 다시 시도해주세요!")
+                    # 가상 데이터 대신 재시도 안내 출력
+                    if reason == "timeout":
+                        st.error("⚠️ 도서관 서버 응답이 지연되고 있습니다. 잠시 후 다시 가챠를 돌려주세요! 🔄")
+                    else:
+                        st.warning("⚠️ 지정된 페이지 범위 내에 원하는 분야의 도서를 찾지 못했습니다. 운명의 책을 다시 한 번 돌려보세요! 🎲")
                 else:
-                    if fallback_reason == "timeout":
-                        st.warning("⚠️ **연결 지연 안내**: 현재 도서관 서버 응답이 지연되어, **오프라인 샘플 데이터**로 운명의 책을 대체 선별했습니다!")
-                    elif fallback_reason == "no_results":
-                        st.warning("⚠️ **검색 결과 없음**: 지정된 5페이지 범위 내에 원하는 분류의 도서를 찾지 못해, **오프라인 샘플 데이터**로 운명의 책을 대체 선별했습니다!")
 
                     result_book = random.choice(books)
                     expected_location = get_location_by_kdc(selected_kdc)
