@@ -58,12 +58,9 @@ def fetch_books_by_kdc(kdc_code, max_retries=10):
     fallback_reason = "timeout"
     
     for attempt in range(max_retries):
-        # 0~9와 같은 숫자만 검색하면 엉뚱한 책이 잡히므로 "자연과학 4" 처럼 키워드를 구체화하여 적중률을 크게 높입니다.
-        category_name = KDC_CATEGORIES.get(str(kdc_code), "")
-        search_query = f"{category_name} {kdc_code}".strip()
-        
+        # pyxis-api 전용 '분류기호(cl)' 검색 적용: 해당 그룹 번호로 시작하는 진짜 도서만 100% 가져옵니다.
         params = {
-            'ALL': f'k|a|{search_query}',
+            'ALL': f'cl|a|{kdc_code}',
             'max': 100,  # 한 번에 100권 호출
             'offset': current_offset,
             'facet': 'true',
