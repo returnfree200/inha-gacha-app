@@ -53,15 +53,15 @@ def fetch_books_by_kdc(kdc_code, max_retries=10):
     """
     url = "https://lib.inha.ac.kr/pyxis-api/1/collections/1/search"
     
-    # 결과를 무작위로 보여주기 위해 초기 offset은 랜덤하게 시작
-    current_offset = random.choice([0, 50, 100, 150, 200, 300, 400])
+    # 한 번에 200권씩 가져오므로 시작점(offset)도 200 단위로 건너뛰어 넓은 범위를 훑습니다
+    current_offset = random.choice([0, 200, 400, 600, 800])
     fallback_reason = "timeout"
     
     for attempt in range(max_retries):
         # pyxis-api 전용 '분류기호(cl)' 검색 적용: 해당 그룹 번호로 시작하는 진짜 도서만 100% 가져옵니다.
         params = {
             'ALL': f'cl|a|{str(kdc_code)[:1]}',
-            'max': 100,  # 한 번에 100권 호출
+            'max': 200,  # 한 번에 200권 호출하여 확률 극대화
             'offset': current_offset,
             'facet': 'true',
             'fuzzy': 'true',
@@ -83,16 +83,21 @@ def fetch_books_by_kdc(kdc_code, max_retries=10):
                 
             books = []
             for item in items:
+                branch_vols = item.get("branchVolumes", [])
+                
+                # 정석학술정보관 실물 도서가 아니거나 청구기호 정보가 아예 없는 데이터(전자자료, 외부자료 등)는 무시
+                if not branch_vols or not isinstance(branch_vols, list) or len(branch_vols) == 0:
+                    continue
+                    
+                call_no_info = branch_vols[0].get("volume")
+                if not call_no_info:
+                    continue
+                    
                 title = item.get("titleStatement") or "제목 없음"
                 author = item.get("author") or "저자 미상"
                 pub_year = item.get("publication") or "연도 미상"
                 image_url = item.get("thumbnailUrl") or ""
                 
-                call_no_info = "청구기호 정보 없음"
-                branch_vols = item.get("branchVolumes", [])
-                if branch_vols and isinstance(branch_vols, list) and len(branch_vols) > 0:
-                    call_no_info = branch_vols[0].get("volume") or "청구기호 정보 없음"
-                    
                 books.append({
                     "titleInfo": title,
                     "authorInfo": author,
@@ -115,8 +120,8 @@ def fetch_books_by_kdc(kdc_code, max_retries=10):
                 # 조건에 맞는 책을 찾았으면 즉시 반환
                 return valid_books, None
             else:
-                # 조건에 맞는 책이 없으면 offset을 100(max값)만큼 늘려서 다음 페이지 탐색
-                current_offset += 100
+                # 조건에 맞는 책이 없으면 offset을 200(max값)만큼 늘려서 다음 페이지 탐색
+                current_offset += 200
                 fallback_reason = "no_results"
                 
         except Exception as e:
