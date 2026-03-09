@@ -10,6 +10,7 @@ st.set_page_config(
 )
 
 import requests
+import re
 
 
 # --- KDC 대분류 정의 ---
@@ -45,94 +46,113 @@ def get_location_by_kdc(kdc_code):
         return "위치 정보 없음"
 
 # --- 데이터 가져오기 (Inha OpenAPI 연동 & Fallback) ---
-def fetch_books_by_kdc(kdc_code, is_fallback_allowed=True):
+def fetch_books_by_kdc(kdc_code, is_fallback_allowed=True, max_retries=5):
     """
     인하대학교 정석학술정보관 API 연동 함수 (에러 발생 시 Mock Data로 자동 우회)
+    트래픽 제한을 위해 최대 max_retries 만큼 페이징(offset)을 늘려가며 요청합니다.
     """
-    # 넓은 범위로 검색 후 파이썬에서 필터링 (결과 풀을 늘리기 위함)
     url = "https://lib.inha.ac.kr/pyxis-api/1/collections/1/search"
-    params = {
-        'ALL': f'k|a|{kdc_code}',
-        'max': 100,  # 여러 권을 한 번에 호출
-        'offset': random.choice([0, 50, 100, 150, 200]),  # 랜덤 페이지
-        'facet': 'true',
-        'fuzzy': 'true',
-        'isForPyxis3': 'true'
-    }
     
-    try:
-        # 응답 지연 시 빠르게 대체 데이터로 넘어가도록 timeout 5초 설정
-        response = requests.get(url, params=params, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        
-        items = data.get("data", {}).get("list", [])
-        
-        if not items:
-            raise ValueError("검색 결과 없음")
-            
-        books = []
-        for item in items:
-            title = item.get("titleStatement") or "제목 없음"
-            author = item.get("author") or "저자 미상"
-            pub_year = item.get("publication") or "연도 미상"
-            image_url = item.get("thumbnailUrl") or ""
-            
-            call_no_info = "청구기호 정보 없음"
-            branch_vols = item.get("branchVolumes", [])
-            if branch_vols and isinstance(branch_vols, list) and len(branch_vols) > 0:
-                call_no_info = branch_vols[0].get("volume") or "청구기호 정보 없음"
-                
-            books.append({
-                "titleInfo": title,
-                "authorInfo": author,
-                "pubYearInfo": pub_year,
-                "callNoInfo": call_no_info,
-                "imageUrl": image_url
-            })
-            
-        # 분류 기호(KDC)에 정확히 일치하는 도서만 필터링 (청구기호가 선택한 KDC 숫자로 시작)
-        valid_books = []
-        for b in books:
-            cnum = b["callNoInfo"].upper().strip()
-            # 일반 청구기호 혹은 참고도서(R) 등 접두어가 붙은 경우 처리
-            if cnum.startswith(str(kdc_code)) or cnum.replace("R ", "").replace("REF ", "").startswith(str(kdc_code)):
-                valid_books.append(b)
-                
-        if not valid_books:
-            raise ValueError("해당 분류의 검색 결과가 페이지에 없습니다.")
-            
-        return valid_books, False  # (데이터, fallback_여부)
-        
-    except Exception as e:
-        if not is_fallback_allowed:
-            raise Exception("API 통신 중 오류가 발생했습니다.")
-            
-        # API 실패 시 빈출되는 Mock Data Fallback
-        mock_database = {
-            "0": [
-                {"titleInfo": "거의 모든 IT의 역사", "authorInfo": "정지훈", "pubYearInfo": "2010", "callNoInfo": "004.09 정78ㄱ", "imageUrl": "https://picsum.photos/seed/it/300/400"},
-                {"titleInfo": "도서관의 비밀", "authorInfo": "이정수", "pubYearInfo": "2018", "callNoInfo": "020 이74ㄷ", "imageUrl": "https://picsum.photos/seed/lib/300/400"}
-            ],
-            "1": [
-                {"titleInfo": "철학은 어떻게 삶의 무기가 되는가", "authorInfo": "야마구치 슈", "pubYearInfo": "2019", "callNoInfo": "104 야32ㅊ", "imageUrl": "https://picsum.photos/seed/philo/300/400"}
-            ],
-            "3": [
-                {"titleInfo": "정의란 무엇인가", "authorInfo": "마이클 샌델", "pubYearInfo": "2010", "callNoInfo": "340.2 샌24ㅈ", "imageUrl": "https://picsum.photos/seed/justice/300/400"}
-            ],
-            "5": [
-                {"titleInfo": "클린 코드", "authorInfo": "로버트 C. 마틴", "pubYearInfo": "2013", "callNoInfo": "566.01 마88ㅋ", "imageUrl": "https://picsum.photos/seed/code/300/400"}
-            ],
-            "8": [
-                {"titleInfo": "소년이 온다", "authorInfo": "한강", "pubYearInfo": "2014", "callNoInfo": "813.6 한11ㅅ", "imageUrl": "https://picsum.photos/seed/novel/300/400"}
-            ]
+    # 결과를 무작위로 보여주기 위해 초기 offset은 랜덤하게 시작
+    current_offset = random.choice([0, 50, 100, 150, 200])
+    fallback_reason = "timeout"
+    
+    for attempt in range(max_retries):
+        params = {
+            'ALL': f'k|a|{kdc_code}',
+            'max': 100,  # 한 번에 100권 호출
+            'offset': current_offset,
+            'facet': 'true',
+            'fuzzy': 'true',
+            'isForPyxis3': 'true'
         }
         
-        fallback_data = mock_database.get(kdc_code, [
-            {"titleInfo": f"{KDC_CATEGORIES.get(kdc_code, '도서')} 추천서", "authorInfo": "정석가챠봇", "pubYearInfo": "2024", "callNoInfo": f"{kdc_code}00 가11ㅊ", "imageUrl": f"https://picsum.photos/seed/{kdc_code}f/300/400"}
-        ])
-        
-        return fallback_data, True
+        try:
+            # 응답 지연 시 빠르게 대체 데이터로 넘어가도록 timeout 5초 설정
+            response = requests.get(url, params=params, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            
+            items = data.get("data", {}).get("list", [])
+            
+            # API에서 더 이상 가져올 데이터가 없으면 중단
+            if not items:
+                fallback_reason = "no_results"
+                break
+                
+            books = []
+            for item in items:
+                title = item.get("titleStatement") or "제목 없음"
+                author = item.get("author") or "저자 미상"
+                pub_year = item.get("publication") or "연도 미상"
+                image_url = item.get("thumbnailUrl") or ""
+                
+                call_no_info = "청구기호 정보 없음"
+                branch_vols = item.get("branchVolumes", [])
+                if branch_vols and isinstance(branch_vols, list) and len(branch_vols) > 0:
+                    call_no_info = branch_vols[0].get("volume") or "청구기호 정보 없음"
+                    
+                books.append({
+                    "titleInfo": title,
+                    "authorInfo": author,
+                    "pubYearInfo": pub_year,
+                    "callNoInfo": call_no_info,
+                    "imageUrl": image_url
+                })
+                
+            # 분류 기호(KDC) 필터링 완화 (어떤 접두어가 붙어있더라도 첫 번째 등장하는 숫자를 KDC로 판별)
+            valid_books = []
+            for b in books:
+                cnum = b["callNoInfo"].upper().strip()
+                match = re.search(r'\d+', cnum)
+                if match and match.group(0).startswith(str(kdc_code)):
+                    valid_books.append(b)
+                    
+            if valid_books:
+                # 조건에 맞는 책을 찾았으면 즉시 반환
+                return valid_books, None
+            else:
+                # 조건에 맞는 책이 없으면 offset을 100(max값)만큼 늘려서 다음 페이지 탐색
+                current_offset += 100
+                fallback_reason = "no_results"
+                
+        except Exception as e:
+            # 네트워크 통신 오류 (Timeout 등)
+            fallback_reason = "timeout"
+            break  # 통신 자체가 안 되면 남은 offset도 시도할 필요 없이 바로 실패 처리
+            
+    # 최대 재시도 횟수 내에 못 찾았거나 네트워크 오류인 경우 예외 발생 처리
+    if not is_fallback_allowed:
+        if fallback_reason == "timeout":
+            raise Exception("API 통신 중 오류가 발생했습니다.")
+        else:
+            raise ValueError("해당 분류의 검색 결과가 페이지에 없습니다.")
+    
+    # API 실패 혹은 검색 결과 없음 시 Mock Data Fallback 반환
+    mock_database = {
+        "0": [
+            {"titleInfo": "거의 모든 IT의 역사", "authorInfo": "정지훈", "pubYearInfo": "2010", "callNoInfo": "004.09 정78ㄱ", "imageUrl": "https://picsum.photos/seed/it/300/400"},
+            {"titleInfo": "도서관의 비밀", "authorInfo": "이정수", "pubYearInfo": "2018", "callNoInfo": "020 이74ㄷ", "imageUrl": "https://picsum.photos/seed/lib/300/400"}
+        ],
+        "1": [
+            {"titleInfo": "철학은 어떻게 삶의 무기가 되는가", "authorInfo": "야마구치 슈", "pubYearInfo": "2019", "callNoInfo": "104 야32ㅊ", "imageUrl": "https://picsum.photos/seed/philo/300/400"}
+        ],
+        "3": [
+            {"titleInfo": "정의란 무엇인가", "authorInfo": "마이클 샌델", "pubYearInfo": "2010", "callNoInfo": "340.2 샌24ㅈ", "imageUrl": "https://picsum.photos/seed/justice/300/400"}
+        ],
+        "5": [
+            {"titleInfo": "클린 코드", "authorInfo": "로버트 C. 마틴", "pubYearInfo": "2013", "callNoInfo": "566.01 마88ㅋ", "imageUrl": "https://picsum.photos/seed/code/300/400"}
+        ],
+        "8": [
+            {"titleInfo": "소년이 온다", "authorInfo": "한강", "pubYearInfo": "2014", "callNoInfo": "813.6 한11ㅅ", "imageUrl": "https://picsum.photos/seed/novel/300/400"}
+        ]
+    }
+    
+    fallback_data = mock_database.get(kdc_code, [
+        {"titleInfo": f"{KDC_CATEGORIES.get(kdc_code, '도서')} 추천서", "authorInfo": "정석가챠봇", "pubYearInfo": "2024", "callNoInfo": f"{kdc_code}00 가11ㅊ", "imageUrl": f"https://picsum.photos/seed/{kdc_code}f/300/400"}
+    ])
+    
+    return fallback_data, fallback_reason
 
 
 # --- 메인 UI ---
@@ -156,17 +176,19 @@ def main():
     
     # 결과 영역
     if is_clicked:
-        with st.spinner('운명의 책을 고르는 중...'):
+        with st.spinner('운명의 책을 고르는 중... (최대 5페이지 탐색)'):
             time.sleep(1.2)  # 로딩 연출
             
             try:
-                books, is_fallback = fetch_books_by_kdc(selected_kdc)
+                books, fallback_reason = fetch_books_by_kdc(selected_kdc)
                 
                 if not books:
                     st.warning("앗, 운명의 책을 찾지 못했습니다! 검색 조건에 맞는 도서가 없거나 API 응답에 문제가 있을 수 있습니다. 다시 시도해주세요!")
                 else:
-                    if is_fallback:
-                        st.warning("⚠️ **연결 지연 안내**: 현재 정석학술정보관 서버 응답이 매우 지연되어, **오프라인 샘플 데이터**로 운명의 책을 선별했습니다!")
+                    if fallback_reason == "timeout":
+                        st.warning("⚠️ **연결 지연 안내**: 현재 도서관 서버 응답이 지연되어, **오프라인 샘플 데이터**로 운명의 책을 대체 선별했습니다!")
+                    elif fallback_reason == "no_results":
+                        st.warning("⚠️ **검색 결과 없음**: 지정된 5페이지 범위 내에 원하는 분류의 도서를 찾지 못해, **오프라인 샘플 데이터**로 운명의 책을 대체 선별했습니다!")
 
                     result_book = random.choice(books)
                     expected_location = get_location_by_kdc(selected_kdc)
