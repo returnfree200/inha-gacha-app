@@ -19,31 +19,66 @@ KDC_CATEGORIES = {
     "100": "철학",
     "200": "종교",
     "300": "사회과학",
-    "400": "자연과학",
-    "500": "기술과학",
-    "600": "예술",
-    "700": "언어",
+    "400": "언어",
+    "500": "순수과학",
+    "600": "기술과학",
+    "700": "예술",
     "800": "문학",
     "900": "역사"
 }
 
-# --- 인하대 맞춤형 로직 ---
-def get_location_by_kdc(kdc_code):
+def get_location_by_call_no(call_no):
     """
-    KDC 번호에 따른 인하대학교 정석학술정보관 위치 반환
+    청구기호(call_no)에 따른 인하대학교 정석학술정보관 층별 위치 반환
     """
-    kdc_num = int(kdc_code)
+    call_no_str = str(call_no).strip()
+    match = re.search(r'(?:^|[A-Za-z가-힣\s])(\d+(?:\.\d+)?)', call_no_str)
     
-    if 0 <= kdc_num <= 199:
-        return "1층 정석라운지 / 헤리티지라운지"
-    elif (200 <= kdc_num <= 299) or (700 <= kdc_num <= 999):
-        return "2층 인문과학정보실"
-    elif 300 <= kdc_num <= 499:
+    if not match:
+        return "정석학술정보관 (위치 정보 없음)"
+        
+    num = float(match.group(1))
+    
+    # 000 총류
+    if 0 <= num < 100:
+        if 1.5 <= num <= 6.69:
+            return "2층 자연과학정보실 (컴퓨터)"
+        elif 1.3 <= num < 1.5 or 6.69 < num < 90:
+            return "3층 인문과학정보실 (인문학)"
+        else:
+            return "4층 사회과학정보실 (학문일반)"
+    # 100 철학 / 200 종교
+    elif 100 <= num < 300:
+        return "3층 인문과학정보실"
+    # 300 사회과학
+    elif 300 <= num < 400:
         return "4층 사회과학정보실"
-    elif 500 <= kdc_num <= 699:
-        return "5층 기술과학정보실"
-    else:
-        return "위치 정보 없음"
+    # 400 언어
+    elif 400 <= num < 500:
+        return "3층 인문과학정보실"
+    # 500 순수과학
+    elif 500 <= num < 600:
+        return "2층 자연과학정보실"
+    # 600 기술과학
+    elif 600 <= num < 700:
+        if num < 630: # 600~629
+            return "2층 자연과학정보실"
+        else:
+            return "4층 사회과학정보실"
+    # 700 예술
+    elif 700 <= num < 800:
+        return "4층 사회과학정보실"
+    # 800 문학
+    elif 800 <= num < 900:
+        return "3층 인문과학정보실"
+    # 900 역사
+    elif 900 <= num < 1000:
+        if 910 <= num < 920:
+            return "4층 사회과학정보실"
+        else:
+            return "3층 인문과학정보실"
+            
+    return "정석학술정보관 (위치 정보 없음)"
 
 # --- 데이터 가져오기 (Inha OpenAPI 연동 & Fallback) ---
 def fetch_books_by_kdc(kdc_code, max_retries=10):
@@ -51,10 +86,37 @@ def fetch_books_by_kdc(kdc_code, max_retries=10):
     인하대학교 정석학술정보관 API 연동 함수
     트래픽 제한을 위해 최대 max_retries 만큼 페이징(offset)을 늘려가며 요청합니다.
     """
-    url = "https://lib.inha.ac.kr/pyxis-api/1/collections/1/search"
+    # 보안을 위해 API URL은 Streamlit Secrets에서 가져옵니다. (.streamlit/secrets.toml)
+    try:
+        url = st.secrets["LIBRARY_API_URL"]
+    except KeyError:
+        return None, "api_url_not_found"
     
+    # 먼저 해당 카테고리의 총 도서 수(totalCount)를 파악하기 위해 가벼운 예비 요청을 보냅니다.
+    total_count = 200  # 예비 요청 실패 시 사용할 기본값
+    try:
+        probe_params = {
+            'ALL': f'cl|a|{str(kdc_code)[:1]}',
+            'max': 1,  # 최소한의 데이터만 요청
+            'offset': 0,
+            'facet': 'true',
+            'fuzzy': 'true',
+            'isForPyxis3': 'true'
+        }
+        probe_res = requests.get(url, params=probe_params, timeout=5)
+        if probe_res.status_code == 200:
+            total_count = probe_res.json().get("data", {}).get("totalCount", 200)
+    except Exception:
+        pass # 파악 실패 시 무시하고 진행
+        
+    # 데이터가 너무 적을 때를 대비하고 최대치를 100,000건(안전 한계선)으로 제한합니다.
+    max_possible_offset = min(total_count - 200, 100000)
+    if max_possible_offset <= 0:
+        max_possible_offset = 0
+        
     # 한 번에 200권씩 가져오므로 시작점(offset)도 200 단위로 건너뛰어 넓은 범위를 훑습니다
-    current_offset = random.choice([0, 200, 400, 600, 800])
+    max_steps = max_possible_offset // 200
+    current_offset = random.randint(0, max_steps) * 200
     fallback_reason = "timeout"
     
     for attempt in range(max_retries):
@@ -69,8 +131,8 @@ def fetch_books_by_kdc(kdc_code, max_retries=10):
         }
         
         try:
-            # 응답 지연 시 빠르게 대체 데이터로 넘어가도록 timeout 5초 설정
-            response = requests.get(url, params=params, timeout=5)
+            # 넉넉한 timeout 설정
+            response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
             
@@ -78,8 +140,13 @@ def fetch_books_by_kdc(kdc_code, max_retries=10):
             
             # API에서 더 이상 가져올 데이터가 없으면 중단
             if not items:
-                fallback_reason = "no_results"
-                break
+                # 결과가 없으면 offset을 처음(0)으로 되돌려서 재시도
+                if current_offset > 0:
+                    current_offset = 0
+                    continue
+                else:
+                    fallback_reason = "no_results"
+                    break
                 
             books = []
             for item in items:
@@ -112,6 +179,10 @@ def fetch_books_by_kdc(kdc_code, max_retries=10):
                 cnum = b["callNoInfo"].upper().strip()
                 match = re.search(r'\d+', cnum)
                 if match and match.group(0).startswith(str(kdc_code)[:1]):
+                    # 저자 미상 도서는 제외합니다.
+                    if b["authorInfo"] == "저자 미상":
+                        continue
+                        
                     # 한글 서적 위주 노출: 제목이나 저자에 한글이 1글자라도 섞인 도서만 선별합니다
                     if re.search(r'[가-힣]', b["titleInfo"]) or re.search(r'[가-힣]', b["authorInfo"]):
                         valid_books.append(b)
@@ -125,9 +196,10 @@ def fetch_books_by_kdc(kdc_code, max_retries=10):
                 fallback_reason = "no_results"
                 
         except Exception as e:
-            # 네트워크 통신 오류 (Timeout 등)
+            # 네트워크 통신 오류 시 약간의 대기 후 재시도
+            time.sleep(1)
             fallback_reason = "timeout"
-            break  # 통신 자체가 안 되면 남은 offset도 시도할 필요 없이 바로 실패 처리
+            continue
             
     # 찾지 못했을 경우 억지로 샘플 데이터를 만들지 않고 사유만 반환하여 UI에 위임
     return None, fallback_reason
@@ -164,12 +236,14 @@ def main():
                     # 가상 데이터 대신 재시도 안내 출력
                     if reason == "timeout":
                         st.error("⚠️ 도서관 서버 응답이 지연되고 있습니다. 잠시 후 다시 가챠를 돌려주세요! 🔄")
+                    elif reason == "api_url_not_found":
+                        st.error("⚠️ API URL이 설정되지 않았습니다. 관리자에게 문의하세요.")
                     else:
                         st.warning("⚠️ 해당 분야의 운명의 책을 찾지 못했습니다. 다시 한 번 가챠를 돌려주세요! 🎲")
                 else:
 
                     result_book = random.choice(books)
-                    expected_location = get_location_by_kdc(selected_kdc)
+                    expected_location = get_location_by_call_no(result_book.get('callNoInfo', ''))
                     
                     st.balloons()
                     st.write("") # 여백
